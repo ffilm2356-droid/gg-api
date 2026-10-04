@@ -53,7 +53,7 @@ class BatchGenerator {
   }
 
   async generateImages(prompts, opts = {}) {
-    const model = opts.model || this.config.imageModel || 'gemini-2.0-flash-exp';
+    const model = opts.model || this.config.imageModel || 'gemini-3.1-flash-image';
     const outDir = path.join(this.outputDir, 'images');
     fs.mkdirSync(outDir, { recursive: true });
 
@@ -105,7 +105,7 @@ class BatchGenerator {
   }
 
   async generateImagesWithRef(prompts, refImagePath, opts = {}) {
-    const model = opts.model || this.config.imageModel || 'gemini-2.0-flash-exp';
+    const model = opts.model || this.config.imageModel || 'gemini-3.1-flash-image';
     const outDir = path.join(this.outputDir, 'images');
     fs.mkdirSync(outDir, { recursive: true });
 
