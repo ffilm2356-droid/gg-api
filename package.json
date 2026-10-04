@@ -1,7 +1,7 @@
 {
   "name": "gg-api",
   "version": "1.0.0",
-  "description": "High-performance batch image/video generator via Gemini API with multi-key rotation",
+  "description": "Batch image/video generator via AIStudio2API - no API keys, no rate limits",
   "main": "src/index.js",
   "type": "module",
   "scripts": {

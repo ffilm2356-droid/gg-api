@@ -3,45 +3,21 @@ import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import BatchGenerator from './batch-generator.js';
+import StudioProxyClient from './studio-proxy-client.js';
 import Logger from './logger.js';
 
 const logger = new Logger(process.env.LOG_LEVEL || 'info');
 
 function loadConfig() {
-  const mode = (process.env.MODE || 'apikey').toLowerCase();
-
-  if (mode === 'proxy') {
-    const proxyUrl = process.env.PROXY_URL || 'http://127.0.0.1:2048';
-    logger.info(`Mode: PROXY → ${proxyUrl}`);
-    return {
-      mode: 'proxy',
-      proxyUrl,
-      proxyApiKey: process.env.PROXY_API_KEY || '',
-      proxyConcurrency: parseInt(process.env.PROXY_CONCURRENCY || '10'),
-      imageModel: process.env.IMAGE_MODEL || 'gemini-2.0-flash-exp',
-      videoModel: process.env.VIDEO_MODEL || 'veo-2.0-generate-001',
-      chatModel: process.env.CHAT_MODEL || 'gemini-2.5-flash',
-      maxRetries: parseInt(process.env.MAX_RETRIES || '5'),
-      outputDir: process.env.OUTPUT_DIR || './output',
-    };
-  }
-
-  const keys = (process.env.GEMINI_API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
-  if (keys.length === 0) {
-    logger.error('No API keys configured. Set GEMINI_API_KEYS in .env or use MODE=proxy');
-    process.exit(1);
-  }
-
-  logger.info(`Mode: API KEY (${keys.length} keys)`);
+  const proxyUrl = process.env.PROXY_URL || 'http://127.0.0.1:2048';
   return {
-    mode: 'apikey',
-    apiKeys: keys,
+    proxyUrl,
+    proxyApiKey: process.env.PROXY_API_KEY || '',
+    concurrency: parseInt(process.env.CONCURRENCY || '10'),
     imageModel: process.env.IMAGE_MODEL || 'gemini-2.0-flash-exp',
     videoModel: process.env.VIDEO_MODEL || 'veo-2.0-generate-001',
     chatModel: process.env.CHAT_MODEL || 'gemini-2.5-flash',
-    concurrencyPerKey: parseInt(process.env.CONCURRENCY_PER_KEY || '2'),
     maxRetries: parseInt(process.env.MAX_RETRIES || '5'),
-    rateLimitIntervalMs: parseInt(process.env.RATE_LIMIT_INTERVAL_MS || '4200'),
     outputDir: process.env.OUTPUT_DIR || './output',
   };
 }
@@ -67,6 +43,17 @@ async function cmdGenerate(flags) {
   const promptsFile = flags.file || flags.prompts || process.env.PROMPTS_FILE || './prompts.csv';
   const refImage = flags.ref || null;
 
+  logger.info(`Proxy: ${config.proxyUrl}`);
+
+  const client = new StudioProxyClient(logger, config.proxyUrl);
+  const health = await client.healthCheck();
+  if (!health.ok) {
+    logger.error(`AIStudio2API not reachable at ${config.proxyUrl}`);
+    logger.error(`Start AIStudio2API first. See SETUP-PROXY.md`);
+    process.exit(1);
+  }
+  logger.info('AIStudio2API: connected');
+
   if (!fs.existsSync(promptsFile)) {
     logger.error(`Prompts file not found: ${promptsFile}`);
     logger.info('Create a prompts.csv with format: id,prompt');
@@ -81,8 +68,7 @@ async function cmdGenerate(flags) {
     process.exit(1);
   }
 
-  logger.info(`Loaded ${prompts.length} prompts from ${promptsFile}`);
-  logger.info(`Keys: ${config.apiKeys.length}, Concurrency: ${gen.concurrency}, Type: ${type}`);
+  logger.info(`${prompts.length} prompts, ${config.concurrency} workers, type=${type}`);
 
   process.on('SIGINT', () => { gen.abort(); });
 
@@ -106,27 +92,22 @@ async function cmdGenerate(flags) {
     });
   }
 
-  logger.info(`\nResults: ${results.success} success, ${results.failed} failed, ${results.skipped} skipped`);
+  logger.info(`\nResults: ${results.success} ok, ${results.failed} fail`);
   process.exit(results.failed > 0 ? 1 : 0);
 }
 
-function cmdStatus() {
+async function cmdStatus() {
   const config = loadConfig();
   logger.info('=== GG-API Status ===');
-  logger.info(`Mode: ${config.mode}`);
-
-  if (config.mode === 'proxy') {
-    logger.info(`Proxy URL: ${config.proxyUrl}`);
-    logger.info(`Concurrency: ${config.proxyConcurrency}`);
-  } else {
-    logger.info(`API Keys: ${config.apiKeys.length}`);
-    logger.info(`Concurrency: ${config.apiKeys.length * config.concurrencyPerKey} (${config.apiKeys.length} keys × ${config.concurrencyPerKey})`);
-    logger.info(`Rate Limit Interval: ${config.rateLimitIntervalMs}ms`);
-  }
-
+  logger.info(`Proxy: ${config.proxyUrl}`);
+  logger.info(`Concurrency: ${config.concurrency}`);
   logger.info(`Image Model: ${config.imageModel}`);
   logger.info(`Video Model: ${config.videoModel}`);
-  logger.info(`Output Dir: ${config.outputDir}`);
+  logger.info(`Output: ${config.outputDir}`);
+
+  const client = new StudioProxyClient(logger, config.proxyUrl);
+  const health = await client.healthCheck();
+  logger.info(`AIStudio2API: ${health.ok ? 'ONLINE' : 'OFFLINE - ' + (health.error || '')}`);
 
   const outputDir = config.outputDir;
   if (fs.existsSync(outputDir)) {
@@ -135,13 +116,6 @@ function cmdStatus() {
     const imgCount = fs.existsSync(imgDir) ? fs.readdirSync(imgDir).length : 0;
     const vidCount = fs.existsSync(vidDir) ? fs.readdirSync(vidDir).length : 0;
     logger.info(`Generated: ${imgCount} images, ${vidCount} videos`);
-  }
-
-  if (config.mode === 'proxy') {
-    logger.info(`\nEstimated daily capacity: 100K+ images (depends on AIStudio2API accounts)`);
-  } else {
-    const est = config.apiKeys.length * (60000 / config.rateLimitIntervalMs) * 60 * 24;
-    logger.info(`\nEstimated daily capacity: ~${Math.floor(est).toLocaleString()} images`);
   }
 }
 
@@ -154,7 +128,6 @@ function cmdSetup() {
   } else if (fs.existsSync(envExample)) {
     fs.copyFileSync(envExample, envFile);
     logger.info('Created .env from .env.example');
-    logger.info('Edit .env and add your GEMINI_API_KEYS');
   } else {
     logger.error('.env.example not found');
   }
@@ -163,32 +136,38 @@ function cmdSetup() {
   fs.mkdirSync(outputDir, { recursive: true });
   fs.mkdirSync(path.join(outputDir, 'images'), { recursive: true });
   fs.mkdirSync(path.join(outputDir, 'videos'), { recursive: true });
-  logger.info(`Output directories created: ${outputDir}/`);
+  logger.info(`Output dirs: ${outputDir}/`);
 
   if (!fs.existsSync('./prompts.csv')) {
     fs.writeFileSync('./prompts.csv', 'id,prompt\n1,"A beautiful sunset over the ocean"\n2,"A cute cat wearing a hat"\n3,"A futuristic city at night"\n');
     logger.info('Created example prompts.csv');
   }
+
+  logger.info('\nNext steps:');
+  logger.info('1. Download & run AIStudio2API (see SETUP-PROXY.md)');
+  logger.info('2. Edit .env with your PROXY_URL');
+  logger.info('3. npm run gen:images');
 }
 
 function showHelp() {
   console.log(`
-GG-API - High-Performance Batch Image/Video Generator
+GG-API - Batch Image/Video Generator via AIStudio2API
+No API keys needed. No rate limits. ~100K images/day with 2 Google accounts.
 
 Usage:
   node src/cli.js <command> [options]
 
 Commands:
   generate    Generate images or videos from prompts file
-  status      Show configuration and stats
-  setup       Initialize project (create .env, dirs)
+  status      Show config and AIStudio2API connection status
+  setup       Initialize project (create .env, output dirs)
 
 Generate Options:
   --type <image|video>    Generation type (default: image)
-  --file <path>           Prompts file path (CSV or JSON)
+  --file <path>           Prompts file (CSV or JSON)
   --model <model>         Override model name
-  --ref <path>            Reference image for image generation
-  --timeout <ms>          Request timeout in ms
+  --ref <path>            Reference image for generation
+  --timeout <ms>          Request timeout
   --temperature <float>   Generation temperature
 
 npm Scripts:
@@ -201,6 +180,9 @@ Examples:
   node src/cli.js generate --type image --file prompts.csv
   node src/cli.js generate --type video --file video-prompts.json
   node src/cli.js generate --ref reference.png --file prompts.csv
+
+Prerequisites:
+  AIStudio2API running locally (see SETUP-PROXY.md)
 `);
 }
 

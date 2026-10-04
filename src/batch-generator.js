@@ -1,46 +1,17 @@
 import fs from 'fs';
 import path from 'path';
-import GeminiClient from './gemini-client.js';
 import StudioProxyClient from './studio-proxy-client.js';
-import KeyRotator from './key-rotator.js';
 
 class BatchGenerator {
   constructor(config, logger) {
     this.logger = logger;
     this.config = config;
-    this.mode = config.mode || 'apikey';
-
-    if (this.mode === 'proxy') {
-      this.client = new StudioProxyClient(logger, config.proxyUrl || 'http://127.0.0.1:2048');
-      this.concurrency = config.proxyConcurrency || 10;
-      this.rotator = null;
-      this.proxyApiKey = config.proxyApiKey || '';
-    } else {
-      this.client = new GeminiClient(logger);
-      this.rotator = new KeyRotator(config.apiKeys, {
-        rateLimitIntervalMs: config.rateLimitIntervalMs || 4200,
-        maxRetries: config.maxRetries || 5,
-      });
-      this.concurrency = config.apiKeys.length * (config.concurrencyPerKey || 2);
-    }
-
+    this.client = new StudioProxyClient(logger, config.proxyUrl);
+    this.apiKey = config.proxyApiKey || '';
+    this.concurrency = config.concurrency || 10;
     this.outputDir = config.outputDir || './output';
     this.results = { success: 0, failed: 0, skipped: 0, errors: [] };
     this.aborted = false;
-  }
-
-  async _getKey() {
-    if (this.mode === 'proxy') return { key: this.proxyApiKey, _proxy: true };
-    return this.rotator.waitForKey();
-  }
-
-  _markSuccess(entry) {
-    if (this.rotator) this.rotator.markSuccess(entry);
-  }
-
-  _markError(entry, status) {
-    if (this.rotator) return this.rotator.markError(entry, status);
-    return 0;
   }
 
   loadPrompts(filePath) {
@@ -86,9 +57,9 @@ class BatchGenerator {
     const outDir = path.join(this.outputDir, 'images');
     fs.mkdirSync(outDir, { recursive: true });
 
-    this.logger.info(`Starting batch image generation: ${prompts.length} prompts, ${this.concurrency} workers, model=${model}`);
-    return this._runBatch(prompts, async (entry, keyEntry) => {
-      const res = await this.client.generateImage(keyEntry.key, entry.prompt, model, {
+    this.logger.info(`Batch image: ${prompts.length} prompts, ${this.concurrency} workers, model=${model}`);
+    return this._runBatch(prompts, async (entry) => {
+      const res = await this.client.generateImage(this.apiKey, entry.prompt, model, {
         timeout: opts.timeout || 120000,
         temperature: opts.temperature,
       });
@@ -112,9 +83,9 @@ class BatchGenerator {
     const outDir = path.join(this.outputDir, 'videos');
     fs.mkdirSync(outDir, { recursive: true });
 
-    this.logger.info(`Starting batch video generation: ${prompts.length} prompts, ${this.concurrency} workers, model=${model}`);
-    return this._runBatch(prompts, async (entry, keyEntry) => {
-      const res = await this.client.generateVideo(keyEntry.key, entry.prompt, model, {
+    this.logger.info(`Batch video: ${prompts.length} prompts, ${this.concurrency} workers, model=${model}`);
+    return this._runBatch(prompts, async (entry) => {
+      const res = await this.client.generateVideo(this.apiKey, entry.prompt, model, {
         timeout: opts.timeout || 300000,
         temperature: opts.temperature,
       });
@@ -138,9 +109,9 @@ class BatchGenerator {
     const outDir = path.join(this.outputDir, 'images');
     fs.mkdirSync(outDir, { recursive: true });
 
-    this.logger.info(`Starting batch image+ref generation: ${prompts.length} prompts, ref=${refImagePath}`);
-    return this._runBatch(prompts, async (entry, keyEntry) => {
-      const res = await this.client.generateImageWithRef(keyEntry.key, entry.prompt, refImagePath, model, {
+    this.logger.info(`Batch image+ref: ${prompts.length} prompts, ref=${refImagePath}`);
+    return this._runBatch(prompts, async (entry) => {
+      const res = await this.client.generateImageWithRef(this.apiKey, entry.prompt, refImagePath, model, {
         timeout: opts.timeout || 120000,
       });
 
@@ -179,13 +150,13 @@ class BatchGenerator {
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     this.logger.info('');
-    this.logger.info(`Batch complete: ${this.results.success} succeeded, ${this.results.failed} failed in ${elapsed}s`);
-    this.logger.info(`Throughput: ${(this.results.success / (elapsed / 60)).toFixed(1)} items/min`);
+    this.logger.info(`Done: ${this.results.success} ok, ${this.results.failed} fail in ${elapsed}s`);
+    this.logger.info(`Speed: ${(this.results.success / (elapsed / 60)).toFixed(1)} items/min`);
 
     if (this.results.errors.length > 0) {
       const errorLog = path.join(this.outputDir, 'errors.json');
       fs.writeFileSync(errorLog, JSON.stringify(this.results.errors, null, 2));
-      this.logger.info(`Error details saved to ${errorLog}`);
+      this.logger.info(`Errors: ${errorLog}`);
     }
 
     return this.results;
@@ -200,20 +171,18 @@ class BatchGenerator {
       let success = false;
 
       while (retries <= this.config.maxRetries && !this.aborted) {
-        const keyEntry = await this._getKey();
-
         try {
-          await taskFn(entry, keyEntry);
-          this._markSuccess(keyEntry);
+          await taskFn(entry);
           this.results.success++;
           success = true;
           break;
         } catch (err) {
           const status = this._extractStatus(err);
-          const backoff = this._markError(keyEntry, status);
 
           if (status === 429 || status === 503) {
-            this.logger.debug(`Worker ${id}: rate limited on "${entry.id}", retry ${retries + 1} (backoff ${backoff}ms)`);
+            const wait = Math.min(2000 * Math.pow(2, retries), 30000);
+            this.logger.debug(`Worker ${id}: rate limited "${entry.id}", wait ${wait}ms`);
+            await new Promise(r => setTimeout(r, wait));
             retries++;
             continue;
           }
@@ -254,14 +223,11 @@ class BatchGenerator {
 
   abort() {
     this.aborted = true;
-    this.logger.warn('Batch generation aborted');
+    this.logger.warn('Aborted');
   }
 
   getStats() {
-    return {
-      ...this.results,
-      keys: this.rotator.getStats(),
-    };
+    return { ...this.results };
   }
 }
 

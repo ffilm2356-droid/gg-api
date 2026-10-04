@@ -1,90 +1,147 @@
-# Setup AIStudio2API Proxy (No Rate Limits)
+# Hướng dẫn cài đặt GG-API
 
-## Why Proxy Mode?
+## Tổng quan
 
-- **No API key rate limits** - bypasses the 10-15 RPM free tier limit
-- **Dual quota channels** - each Google account has Playground + Build quotas
-- **2 accounts = 100K+ images/day**
-- **No browser needed** - WAA_BACKEND=go mode
+GG-API tạo ảnh/video hàng loạt qua AIStudio2API - không cần API key, không giới hạn rate limit.
+- 2 tài khoản Google = ~100K+ ảnh/ngày
+- Không cần trình duyệt khi chạy (WAA_BACKEND=go)
+- Hỗ trợ: tạo ảnh, video, ảnh có tham chiếu
 
-## Step 1: Download AIStudio2API
+## Bước 1: Cài AIStudio2API
 
+### Windows
 ```bash
-# From GitHub releases
+# Tải từ GitHub releases
 # https://github.com/Mag1cFall/AIStudio2API/releases
-# Download linux-amd64.tar.gz (or windows .zip)
+# Tải file: windows-amd64.zip
+# Giải nén và chạy start.bat
+```
 
+### Linux
+```bash
 wget https://github.com/Mag1cFall/AIStudio2API/releases/latest/download/linux-amd64.tar.gz
 tar xzf linux-amd64.tar.gz
 cd aistudio2api
-```
-
-## Step 2: Login Google Accounts
-
-```bash
-# First time setup - opens browser for Google login
+chmod +x aistudio2api
 ./aistudio2api
-
-# Go to http://127.0.0.1:2048 in your browser
-# Click "Add Account" and login with your Google account
-# Repeat for second account
 ```
 
-## Step 3: Configure AIStudio2API
+### Docker
+```bash
+docker run -d -p 2048:2048 -v ./data:/app/data mag1cfall/aistudio2api
+```
 
-Create `.env` in the aistudio2api directory:
+## Bước 2: Đăng nhập tài khoản Google
+
+1. Mở trình duyệt: http://127.0.0.1:2048
+2. Click "Add Account"
+3. Đăng nhập tài khoản Google thứ 1
+4. Lặp lại cho tài khoản Google thứ 2
+5. Kiểm tra: cả 2 tài khoản hiện trạng thái "Active"
+
+> Chỉ cần đăng nhập 1 lần. Sau đó AIStudio2API tự quản lý session.
+
+## Bước 3: Cấu hình AIStudio2API
+
+Tạo file `.env` trong thư mục aistudio2api:
 
 ```env
 LISTEN_ADDR=127.0.0.1:2048
 WAA_BACKEND=go
 UPSTREAM_CHANNELS=playground,build
-PROXY_API_KEY=your-secret-key-here
+PROXY_API_KEY=mat-khau-cua-ban
 ```
 
-Key settings:
-- `WAA_BACKEND=go` - pure Go auth, no browser needed at runtime
-- `UPSTREAM_CHANNELS=playground,build` - use both quota channels
-- `PROXY_API_KEY` - protect your proxy with a key
+Giải thích:
+- `WAA_BACKEND=go` → chạy bằng Go thuần, KHÔNG cần trình duyệt
+- `UPSTREAM_CHANNELS=playground,build` → dùng cả 2 kênh quota
+- `PROXY_API_KEY` → mật khẩu bảo vệ API (tùy chọn)
 
-## Step 4: Run AIStudio2API
+Restart AIStudio2API sau khi sửa .env.
+
+## Bước 4: Cài GG-API
 
 ```bash
-./aistudio2api
-# Should show: Listening on 127.0.0.1:2048
-# Should show: 2 accounts loaded
+git clone https://github.com/ffilm2356-droid/gg-api.git
+cd gg-api
+npm install
+npm run setup
 ```
 
-## Step 5: Configure gg-api
+## Bước 5: Cấu hình GG-API
 
-Edit `gg-api/.env`:
+Sửa file `.env` trong thư mục gg-api:
 
 ```env
-MODE=proxy
 PROXY_URL=http://127.0.0.1:2048
-PROXY_API_KEY=your-secret-key-here
-PROXY_CONCURRENCY=10
+PROXY_API_KEY=mat-khau-cua-ban
+CONCURRENCY=10
 ```
 
-## Step 6: Generate!
+## Bước 6: Tạo file prompts
+
+### CSV format (prompts.csv):
+```csv
+id,prompt
+1,"Cô gái Việt Nam mặc áo dài đỏ đứng trước hồ Hoàn Kiếm"
+2,"Cảnh hoàng hôn trên biển Đà Nẵng"
+3,"Quán cà phê vintage Sài Gòn ban đêm"
+```
+
+### JSON format (prompts.json):
+```json
+[
+  {"id": "1", "prompt": "Cô gái Việt Nam mặc áo dài đỏ"},
+  {"id": "2", "prompt": "Cảnh hoàng hôn trên biển Đà Nẵng"}
+]
+```
+
+## Bước 7: Chạy!
 
 ```bash
-cd gg-api
+# Tạo ảnh
 npm run gen:images
-# or
-node src/cli.js generate --type image --file prompts.csv
+
+# Tạo video
+npm run gen:videos
+
+# Tạo ảnh với ảnh tham chiếu
+node src/cli.js generate --ref anh-tham-chieu.png --file prompts.csv
+
+# Xem trạng thái
+npm run status
 ```
 
-## Performance Expectations
+## Tùy chỉnh nâng cao
 
-| Accounts | Channels | Est. Images/Day |
-|----------|----------|-----------------|
-| 1        | 2        | ~50K            |
-| 2        | 4        | ~100K+          |
-| 3        | 6        | ~150K+          |
+```bash
+# Tăng concurrency (nhanh hơn, nhưng có thể bị rate limit)
+CONCURRENCY=20
 
-## Troubleshooting
+# Đổi model
+IMAGE_MODEL=gemini-2.0-flash-exp
 
-- **Connection refused**: Make sure AIStudio2API is running on the configured port
-- **401 Unauthorized**: Check PROXY_API_KEY matches between both .env files
-- **429 Rate Limited**: Reduce PROXY_CONCURRENCY or add more Google accounts
-- **503 Service Unavailable**: Google backend temporarily down, will auto-retry
+# Debug mode
+LOG_LEVEL=debug
+
+# Dùng file prompts khác
+node src/cli.js generate --file my-prompts.json --type image
+```
+
+## Hiệu suất ước tính
+
+| Số tài khoản | Kênh quota | Ảnh/ngày (ước tính) |
+|---------------|------------|---------------------|
+| 1             | 2          | ~50,000             |
+| 2             | 4          | ~100,000+           |
+| 3             | 6          | ~150,000+           |
+
+## Xử lý lỗi
+
+| Lỗi | Nguyên nhân | Cách sửa |
+|------|-------------|----------|
+| Connection refused | AIStudio2API chưa chạy | Chạy AIStudio2API trước |
+| 401 Unauthorized | Sai PROXY_API_KEY | Kiểm tra key khớp giữa 2 file .env |
+| 429 Rate limited | Quá nhiều request | Giảm CONCURRENCY hoặc thêm tài khoản |
+| 503 Unavailable | Google tạm thời lỗi | Tự động retry, chờ 1-2 phút |
+| No image in response | Prompt bị block | Sửa prompt, tránh nội dung nhạy cảm |
