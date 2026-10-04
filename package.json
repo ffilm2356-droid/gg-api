@@ -1,0 +1,18 @@
+{
+  "name": "gg-api",
+  "version": "1.0.0",
+  "description": "High-performance batch image/video generator via Gemini API with multi-key rotation",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "generate": "node src/cli.js generate",
+    "gen:images": "node src/cli.js generate --type image",
+    "gen:videos": "node src/cli.js generate --type video",
+    "status": "node src/cli.js status",
+    "setup": "node src/cli.js setup"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  }
+}
