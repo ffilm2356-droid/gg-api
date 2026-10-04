@@ -1,21 +1,46 @@
 import fs from 'fs';
 import path from 'path';
 import GeminiClient from './gemini-client.js';
+import StudioProxyClient from './studio-proxy-client.js';
 import KeyRotator from './key-rotator.js';
 
 class BatchGenerator {
   constructor(config, logger) {
     this.logger = logger;
     this.config = config;
-    this.client = new GeminiClient(logger);
-    this.rotator = new KeyRotator(config.apiKeys, {
-      rateLimitIntervalMs: config.rateLimitIntervalMs || 4200,
-      maxRetries: config.maxRetries || 5,
-    });
+    this.mode = config.mode || 'apikey';
+
+    if (this.mode === 'proxy') {
+      this.client = new StudioProxyClient(logger, config.proxyUrl || 'http://127.0.0.1:2048');
+      this.concurrency = config.proxyConcurrency || 10;
+      this.rotator = null;
+      this.proxyApiKey = config.proxyApiKey || '';
+    } else {
+      this.client = new GeminiClient(logger);
+      this.rotator = new KeyRotator(config.apiKeys, {
+        rateLimitIntervalMs: config.rateLimitIntervalMs || 4200,
+        maxRetries: config.maxRetries || 5,
+      });
+      this.concurrency = config.apiKeys.length * (config.concurrencyPerKey || 2);
+    }
+
     this.outputDir = config.outputDir || './output';
-    this.concurrency = config.apiKeys.length * (config.concurrencyPerKey || 2);
     this.results = { success: 0, failed: 0, skipped: 0, errors: [] };
     this.aborted = false;
+  }
+
+  async _getKey() {
+    if (this.mode === 'proxy') return { key: this.proxyApiKey, _proxy: true };
+    return this.rotator.waitForKey();
+  }
+
+  _markSuccess(entry) {
+    if (this.rotator) this.rotator.markSuccess(entry);
+  }
+
+  _markError(entry, status) {
+    if (this.rotator) return this.rotator.markError(entry, status);
+    return 0;
   }
 
   loadPrompts(filePath) {
@@ -175,17 +200,17 @@ class BatchGenerator {
       let success = false;
 
       while (retries <= this.config.maxRetries && !this.aborted) {
-        const keyEntry = await this.rotator.waitForKey();
+        const keyEntry = await this._getKey();
 
         try {
           await taskFn(entry, keyEntry);
-          this.rotator.markSuccess(keyEntry);
+          this._markSuccess(keyEntry);
           this.results.success++;
           success = true;
           break;
         } catch (err) {
           const status = this._extractStatus(err);
-          const backoff = this.rotator.markError(keyEntry, status);
+          const backoff = this._markError(keyEntry, status);
 
           if (status === 429 || status === 503) {
             this.logger.debug(`Worker ${id}: rate limited on "${entry.id}", retry ${retries + 1} (backoff ${backoff}ms)`);

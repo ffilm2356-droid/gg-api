@@ -8,13 +8,33 @@ import Logger from './logger.js';
 const logger = new Logger(process.env.LOG_LEVEL || 'info');
 
 function loadConfig() {
+  const mode = (process.env.MODE || 'apikey').toLowerCase();
+
+  if (mode === 'proxy') {
+    const proxyUrl = process.env.PROXY_URL || 'http://127.0.0.1:2048';
+    logger.info(`Mode: PROXY → ${proxyUrl}`);
+    return {
+      mode: 'proxy',
+      proxyUrl,
+      proxyApiKey: process.env.PROXY_API_KEY || '',
+      proxyConcurrency: parseInt(process.env.PROXY_CONCURRENCY || '10'),
+      imageModel: process.env.IMAGE_MODEL || 'gemini-2.0-flash-exp',
+      videoModel: process.env.VIDEO_MODEL || 'veo-2.0-generate-001',
+      chatModel: process.env.CHAT_MODEL || 'gemini-2.5-flash',
+      maxRetries: parseInt(process.env.MAX_RETRIES || '5'),
+      outputDir: process.env.OUTPUT_DIR || './output',
+    };
+  }
+
   const keys = (process.env.GEMINI_API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
   if (keys.length === 0) {
-    logger.error('No API keys configured. Set GEMINI_API_KEYS in .env');
+    logger.error('No API keys configured. Set GEMINI_API_KEYS in .env or use MODE=proxy');
     process.exit(1);
   }
 
+  logger.info(`Mode: API KEY (${keys.length} keys)`);
   return {
+    mode: 'apikey',
     apiKeys: keys,
     imageModel: process.env.IMAGE_MODEL || 'gemini-2.0-flash-exp',
     videoModel: process.env.VIDEO_MODEL || 'veo-2.0-generate-001',
@@ -93,11 +113,19 @@ async function cmdGenerate(flags) {
 function cmdStatus() {
   const config = loadConfig();
   logger.info('=== GG-API Status ===');
-  logger.info(`API Keys: ${config.apiKeys.length}`);
+  logger.info(`Mode: ${config.mode}`);
+
+  if (config.mode === 'proxy') {
+    logger.info(`Proxy URL: ${config.proxyUrl}`);
+    logger.info(`Concurrency: ${config.proxyConcurrency}`);
+  } else {
+    logger.info(`API Keys: ${config.apiKeys.length}`);
+    logger.info(`Concurrency: ${config.apiKeys.length * config.concurrencyPerKey} (${config.apiKeys.length} keys × ${config.concurrencyPerKey})`);
+    logger.info(`Rate Limit Interval: ${config.rateLimitIntervalMs}ms`);
+  }
+
   logger.info(`Image Model: ${config.imageModel}`);
   logger.info(`Video Model: ${config.videoModel}`);
-  logger.info(`Concurrency: ${config.apiKeys.length * config.concurrencyPerKey} (${config.apiKeys.length} keys × ${config.concurrencyPerKey})`);
-  logger.info(`Rate Limit Interval: ${config.rateLimitIntervalMs}ms`);
   logger.info(`Output Dir: ${config.outputDir}`);
 
   const outputDir = config.outputDir;
@@ -109,8 +137,12 @@ function cmdStatus() {
     logger.info(`Generated: ${imgCount} images, ${vidCount} videos`);
   }
 
-  const est = config.apiKeys.length * (60000 / config.rateLimitIntervalMs) * 60 * 24;
-  logger.info(`\nEstimated daily capacity: ~${Math.floor(est).toLocaleString()} images`);
+  if (config.mode === 'proxy') {
+    logger.info(`\nEstimated daily capacity: 100K+ images (depends on AIStudio2API accounts)`);
+  } else {
+    const est = config.apiKeys.length * (60000 / config.rateLimitIntervalMs) * 60 * 24;
+    logger.info(`\nEstimated daily capacity: ~${Math.floor(est).toLocaleString()} images`);
+  }
 }
 
 function cmdSetup() {
