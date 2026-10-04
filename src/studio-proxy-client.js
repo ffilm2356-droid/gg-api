@@ -49,7 +49,7 @@ class StudioProxyClient {
     });
   }
 
-  async generateImage(apiKey, prompt, model = 'gemini-2.0-flash-exp', opts = {}) {
+  async generateImage(apiKey, prompt, model = 'gemini-3.1-flash-image', opts = {}) {
     const url = `${this.baseUrl}/v1beta/models/${model}:generateContent`;
     const body = {
       contents: [{
@@ -81,7 +81,7 @@ class StudioProxyClient {
     return this._parseMediaResponse(res, 'video');
   }
 
-  async generateImageWithRef(apiKey, prompt, refImagePath, model = 'gemini-2.0-flash-exp', opts = {}) {
+  async generateImageWithRef(apiKey, prompt, refImagePath, model = 'gemini-3.1-flash-image', opts = {}) {
     const imageData = fs.readFileSync(refImagePath);
     const base64 = imageData.toString('base64');
     const ext = path.extname(refImagePath).slice(1).toLowerCase();
@@ -105,7 +105,7 @@ class StudioProxyClient {
     return this._parseImageResponse(res);
   }
 
-  async generateImageOpenAI(apiKey, prompt, model = 'gemini-2.0-flash-exp', opts = {}) {
+  async generateImageOpenAI(apiKey, prompt, model = 'gemini-3.1-flash-image', opts = {}) {
     const url = `${this.baseUrl}/v1/chat/completions`;
     const body = {
       model,
